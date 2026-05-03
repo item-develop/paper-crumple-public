@@ -138,7 +138,7 @@ const PAPER_OFFSETS = [
 async function init() {
   info.textContent = "fetching animation.json...";
 
-  const res = await fetch("/animation.json");
+  const res = await fetch(import.meta.env.BASE_URL + "animation.json");
   if (!res.ok) {
     info.textContent = `ERROR: failed to fetch animation.json (${res.status})`;
     return;

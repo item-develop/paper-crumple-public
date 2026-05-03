@@ -41,7 +41,7 @@ export function createPaper(animData) {
   geometry.setIndex(new THREE.BufferAttribute(indexArray, 1));
 
   // ===== マテリアル =====
-  const texture = new THREE.TextureLoader().load("/pic.png");
+  const texture = new THREE.TextureLoader().load(import.meta.env.BASE_URL + "pic.png");
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.rotation = Math.PI; // UVに合わせて回転
   texture.center.set(0.5, 0.5);
