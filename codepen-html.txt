@@ -1,0 +1,262 @@
+<!-- CodePen HTML Panel -->
+<!-- Three.js r160 (UMD) -->
+<script src="https://cdn.jsdelivr.net/npm/three@r160/build/three.min.js"></script>
+
+<!-- lil-gui UMD -->
+<script src="https://cdn.jsdelivr.net/npm/lil-gui@0.20/dist/lil-gui.umd.js"></script>
+
+<!-- Postprocessing classes implementation (global scope) -->
+<script>
+// EffectComposer - Main composition pipeline
+class EffectComposer {
+  constructor(renderer, renderTarget) {
+    this.renderer = renderer;
+    this._width = renderer.domElement.clientWidth;
+    this._height = renderer.domElement.clientHeight;
+    this.pixelRatio = renderer.getPixelRatio();
+
+    if (renderTarget === undefined) {
+      const format = THREE.RGBAFormat;
+      const type = THREE.UnsignedByteType;
+      renderTarget = new THREE.WebGLRenderTarget(
+        this._width * this.pixelRatio,
+        this._height * this.pixelRatio,
+        { format, type }
+      );
+      renderTarget.texture.name = 'EffectComposer.rt1';
+    }
+
+    this.renderTarget1 = renderTarget;
+    this.renderTarget2 = renderTarget.clone();
+    this.renderTarget2.texture.name = 'EffectComposer.rt2';
+
+    this.writeBuffer = this.renderTarget1;
+    this.readBuffer = this.renderTarget2;
+    this.passes = [];
+  }
+
+  addPass(pass) {
+    this.passes.push(pass);
+    pass.setSize(
+      this._width * this.pixelRatio,
+      this._height * this.pixelRatio
+    );
+  }
+
+  removePass(pass) {
+    const idx = this.passes.indexOf(pass);
+    if (idx !== -1) {
+      this.passes.splice(idx, 1);
+    }
+  }
+
+  render(delta = 0) {
+    let maskActive = false;
+
+    for (let i = 0; i < this.passes.length; i++) {
+      const pass = this.passes[i];
+
+      if (pass.enabled === false) continue;
+
+      pass.render(
+        this.renderer,
+        this.writeBuffer,
+        this.readBuffer,
+        delta,
+        maskActive
+      );
+
+      if (pass.needsSwap) {
+        if (maskActive) {
+          const tmp = this.readBuffer;
+          this.readBuffer = this.writeBuffer;
+          this.writeBuffer = tmp;
+        } else {
+          this.swapBuffers();
+        }
+      }
+    }
+  }
+
+  swapBuffers() {
+    const tmp = this.readBuffer;
+    this.readBuffer = this.writeBuffer;
+    this.writeBuffer = tmp;
+  }
+
+  setSize(width, height) {
+    this._width = width;
+    this._height = height;
+
+    const pixelWidth = width * this.pixelRatio;
+    const pixelHeight = height * this.pixelRatio;
+
+    this.renderTarget1.setSize(pixelWidth, pixelHeight);
+    this.renderTarget2.setSize(pixelWidth, pixelHeight);
+
+    for (const pass of this.passes) {
+      pass.setSize(pixelWidth, pixelHeight);
+    }
+  }
+
+  getPixelRatio() {
+    return this.pixelRatio;
+  }
+
+  setPixelRatio(pixelRatio) {
+    this.pixelRatio = pixelRatio;
+    this.setSize(this._width, this._height);
+  }
+
+  dispose() {
+    this.renderTarget1.dispose();
+    this.renderTarget2.dispose();
+  }
+}
+
+// RenderPass - Render scene to target
+class RenderPass {
+  constructor(scene, camera, overrideMaterial = null, clearColor = null, clearAlpha = 1) {
+    this.scene = scene;
+    this.camera = camera;
+    this.overrideMaterial = overrideMaterial;
+    this.clearColor = clearColor;
+    this.clearAlpha = clearAlpha;
+    this.clear = true;
+    this.clearDepth = true;
+    this.enabled = true;
+    this.needsSwap = true;
+  }
+
+  setSize(width, height) {
+    // RenderPass doesn't need sizing
+  }
+
+  render(renderer, writeBuffer, readBuffer, delta, maskActive) {
+    const oldAutoClear = renderer.autoClear;
+    let oldClearColor, oldClearAlpha;
+
+    if (this.clearColor !== null) {
+      oldClearColor = renderer.getClearColor(new THREE.Color());
+      oldClearAlpha = renderer.getClearAlpha();
+      renderer.setClearColor(this.clearColor, this.clearAlpha);
+    }
+
+    renderer.autoClear = this.clear;
+
+    renderer.setRenderTarget(writeBuffer);
+    if (this.clearDepth) {
+      renderer.clearDepth();
+    }
+
+    renderer.render(this.scene, this.camera);
+
+    if (this.clearColor !== null) {
+      renderer.setClearColor(oldClearColor, oldClearAlpha);
+    }
+
+    renderer.autoClear = oldAutoClear;
+  }
+}
+
+// OutputPass - Final output pass
+class OutputPass {
+  constructor() {
+    this.enabled = true;
+    this.needsSwap = false;
+  }
+
+  setSize(width, height) {
+    // OutputPass doesn't need sizing
+  }
+
+  render(renderer, writeBuffer, readBuffer, delta, maskActive) {
+    renderer.setRenderTarget(null);
+    renderer.clear();
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+    if (readBuffer && readBuffer.texture) {
+      const geometry = new THREE.PlaneGeometry(2, 2);
+      const material = new THREE.MeshBasicMaterial({
+        map: readBuffer.texture
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      scene.add(mesh);
+    }
+
+    renderer.render(scene, camera);
+  }
+}
+
+// SSAOPass - Screen Space Ambient Occlusion
+class SSAOPass {
+  constructor(scene, camera, width = 512, height = 512) {
+    this.scene = scene;
+    this.camera = camera;
+    this.width = width;
+    this.height = height;
+
+    this.kernelRadius = 0.0;
+    this.minDistance = 0.005;
+    this.maxDistance = 0.1;
+    this.intensity = 1.0;
+
+    this.enabled = true;
+    this.needsSwap = true;
+
+    this.renderTarget = new THREE.WebGLRenderTarget(width, height, {
+      type: THREE.UnsignedByteType,
+      format: THREE.RGBAFormat
+    });
+  }
+
+  setSize(width, height) {
+    this.width = width;
+    this.height = height;
+    if (this.renderTarget) {
+      this.renderTarget.setSize(width, height);
+    }
+  }
+
+  render(renderer, writeBuffer, readBuffer, delta, maskActive) {
+    // Simplified SSAO: pass-through with visual parameters available for GUI
+    // Full SSAO would require custom shaders and depth/normal textures
+    renderer.setRenderTarget(writeBuffer);
+    renderer.clear();
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+    if (readBuffer && readBuffer.texture) {
+      const geometry = new THREE.PlaneGeometry(2, 2);
+      const material = new THREE.MeshBasicMaterial({
+        map: readBuffer.texture
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      scene.add(mesh);
+    }
+
+    renderer.render(scene, camera);
+  }
+
+  dispose() {
+    if (this.renderTarget) {
+      this.renderTarget.dispose();
+    }
+  }
+}
+
+// Register globally
+window.EffectComposer = EffectComposer;
+window.RenderPass = RenderPass;
+window.OutputPass = OutputPass;
+window.SSAOPass = SSAOPass;
+</script>
+
+<div id="app"></div>
+<div id="info">loading...</div>
+<div class="codepen-note">
+  <strong>Setup:</strong> Paste JS into JS panel. Update animation.json & pic.png URLs if needed.
+</div>
